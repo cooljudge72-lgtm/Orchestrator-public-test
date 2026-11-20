@@ -57,6 +57,10 @@ head, base, state or counts gives `BLOCKED` (run the status again).
   `CODEX-REVIEW <TASK_ID> <40-hex head SHA> APPROVED`, unedited, naming the **current** head.
   If the newest owner verdict is invalid, the status is `NEEDS_REVIEW`; an older approval is never
   restored. Revision rounds may not exceed `max_revision_rounds`.
+- **Posted directly by the owner (B1):** a verdict comment must have `performed_via_github_app`
+  present and `null`. Comments written through any GitHub App, including the Claude app acting with
+  the owner's identity, are invalid verdicts: they cannot approve, cannot count as a revision round,
+  and, being the newest owner-login verdict, prevent an older approval from becoming current.
 - **Completeness:** files, comments, check runs, workflow runs and jobs are read through GitHub's
   `Link` pagination; counts must match `changed_files`, `comments` or `total_count`. Anything
   incomplete, missing or erroring gives `BLOCKED`.
@@ -107,4 +111,11 @@ head, base, state or counts gives `BLOCKED` (run the status again).
   empty and must not be changed.
 - **Review identity.** The verdict is tied to the owner's account and the exact head SHA, not
   cryptographically to Codex.
+- **B1 mitigation is partial, not identity separation.** While Claude works through the owner's
+  GitHub identity, the `performed_via_github_app` check stops it from *creating* a valid verdict, but
+  GitHub enforces nothing beyond that: the same identity can still **delete** an owner verdict
+  (deletions leave no trace in the REST API), post an invalid verdict that blocks READY, and merge any
+  PR whose required check passed. The check also relies on GitHub continuing to populate
+  `performed_via_github_app` for app-made writes. Full separation needs a separate implementer
+  account, owner approval required by the ruleset, and native PR reviews (migration stages B–E).
 - The claim proves exclusivity per task, not which agent instance performed the work.

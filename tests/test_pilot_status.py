@@ -35,11 +35,21 @@ RULES = [{"type": "deletion"}, {"type": "non_fast_forward"},
           "parameters": {"required_status_checks": [{"context": "unittest", "integration_id": 15368}]}}]
 
 
-def verdict(cid, sha, word, login=OWNER, assoc="OWNER", edited=False, task="T-001", first=None):
+# Shape of the app object GitHub attaches to writes made through the Claude GitHub App
+# (observed on this repository's PRs as performed_via_github_app.slug == "claude").
+CLAUDE_APP = {"id": 1, "slug": "claude", "name": "Claude", "owner": {"login": "example-app-owner"}}
+OTHER_APP = {"id": 2, "slug": "some-other-app", "name": "Other"}
+MISSING = object()
+
+
+def verdict(cid, sha, word, login=OWNER, assoc="OWNER", edited=False, task="T-001", first=None, via_app=None):
     created = f"2026-11-21T10:{cid:02d}:00Z"
     line = first if first is not None else f"CODEX-REVIEW {task} {sha} {word}"
-    return {"id": cid, "user": {"login": login}, "author_association": assoc, "created_at": created,
-            "updated_at": "2026-11-21T11:59:59Z" if edited else created, "body": line + "\n\nFindings: synthetic."}
+    c = {"id": cid, "user": {"login": login}, "author_association": assoc, "created_at": created,
+         "updated_at": "2026-11-21T11:59:59Z" if edited else created, "body": line + "\n\nFindings: synthetic."}
+    if via_app is not MISSING:
+        c["performed_via_github_app"] = via_app          # None = posted directly by the user
+    return c
 
 
 def facts(**over):
@@ -242,6 +252,60 @@ class TestFinding4Verdicts(unittest.TestCase):
     def test_classification_orders_by_id(self):
         out = classify_verdicts([verdict(3, HEAD, "APPROVED"), verdict(1, OLD, "CHANGES_REQUESTED")], OWNER, "T-001")
         self.assertEqual([x["id"] for x in out], [1, 3])
+
+
+class TestB1AppAuthoredVerdicts(unittest.TestCase):
+    """B1: the Claude app writes with the owner's login and OWNER association. Only
+    performed_via_github_app distinguishes it, so app-authored verdicts must never count."""
+
+    def with_comments(self, comments):
+        f = facts(comments=comments)
+        f["pr"]["comments"] = f["pr_recheck"]["comments"] = len(comments)
+        return f
+
+    def test_direct_owner_verdict_is_accepted(self):
+        out = classify_verdicts([verdict(1, HEAD, "APPROVED", via_app=None)], OWNER, "T-001")
+        self.assertTrue(out[0]["valid"])
+        self.assertEqual(v(self.with_comments([verdict(1, HEAD, "APPROVED", via_app=None)])), READY)
+
+    def test_claude_app_verdict_cannot_approve(self):
+        out = classify_verdicts([verdict(1, HEAD, "APPROVED", via_app=CLAUDE_APP)], OWNER, "T-001")
+        self.assertFalse(out[0]["valid"])
+        self.assertIn("GitHub App", out[0]["problem"])
+        self.assertEqual(v(self.with_comments([verdict(1, HEAD, "APPROVED", via_app=CLAUDE_APP)])), NEEDS_REVIEW)
+
+    def test_any_app_is_rejected_not_only_claude(self):
+        self.assertEqual(v(self.with_comments([verdict(1, HEAD, "APPROVED", via_app=OTHER_APP)])), NEEDS_REVIEW)
+
+    def test_empty_app_object_is_still_an_app(self):
+        self.assertEqual(v(self.with_comments([verdict(1, HEAD, "APPROVED", via_app={})])), NEEDS_REVIEW)
+
+    def test_missing_attribution_metadata_fails_closed(self):
+        out = classify_verdicts([verdict(1, HEAD, "APPROVED", via_app=MISSING)], OWNER, "T-001")
+        self.assertFalse(out[0]["valid"])
+        self.assertIn("metadata", out[0]["problem"])
+        self.assertEqual(v(self.with_comments([verdict(1, HEAD, "APPROVED", via_app=MISSING)])), NEEDS_REVIEW)
+
+    def test_app_verdict_after_owner_approval_does_not_count_and_does_not_restore(self):
+        comments = [verdict(1, HEAD, "APPROVED"), verdict(2, HEAD, "CHANGES_REQUESTED", via_app=CLAUDE_APP)]
+        verdict_, reasons, _ = evaluate(self.with_comments(comments))
+        self.assertEqual(verdict_, NEEDS_REVIEW)            # newest owner-login verdict is invalid
+        self.assertIn("GitHub App", reasons[0])
+
+    def test_app_changes_requested_is_not_counted_as_a_revision_round(self):
+        shas = ["1" * 40, "2" * 40, "3" * 40]
+        comments = [verdict(i + 1, s, "CHANGES_REQUESTED", via_app=CLAUDE_APP) for i, s in enumerate(shas)]
+        comments.append(verdict(9, HEAD, "APPROVED"))
+        self.assertEqual(v(self.with_comments(comments)), READY)   # only direct owner verdicts count
+
+    def test_regression_b1_app_self_approval_end_to_end(self):
+        """The reported attack: the implementer posts an exact, unedited CODEX-REVIEW ... APPROVED for
+        the current head through the Claude app, as the owner. It must not yield READY."""
+        forged = verdict(1, HEAD, "APPROVED", via_app=CLAUDE_APP)
+        f = facts(comments=[forged])
+        gh = gh_for(f)
+        self.assertEqual(main(env(), gh=gh), 1)                         # exit 1: not READY
+        self.assertEqual(evaluate(fetch_facts(gh, REPO, OWNER, 2))[0], NEEDS_REVIEW)
 
 
 class TestFinding5PRConsistency(unittest.TestCase):

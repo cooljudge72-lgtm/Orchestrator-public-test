@@ -58,7 +58,8 @@ def _norm_path(path, repo):
 
 def classify_verdicts(comments, owner, task_id):
     """Owner comments whose first line starts with CODEX-REVIEW, oldest first, each marked valid or
-    invalid. Non-owner comments are ignored entirely."""
+    invalid. Non-owner comments are ignored entirely. A verdict is valid only if it was posted
+    directly by the owner (performed_via_github_app is present and null)."""
     out = []
     for c in comments:
         if _get(c, "user", "login") != owner or c.get("author_association") != "OWNER":
@@ -69,7 +70,15 @@ def classify_verdicts(comments, owner, task_id):
             continue
         m = VERDICT_LINE.fullmatch(first)          # exact literal line: no extra spaces, no \r
         problem = ""
-        if not m:
+        # B1: writes made through a GitHub App (e.g. the Claude app acting with the owner's
+        # identity) carry the owner's login and OWNER association; only performed_via_github_app
+        # tells them apart. Such a comment is an INVALID verdict (it can neither approve nor let an
+        # older approval become current). A missing field cannot be confirmed and is also invalid.
+        if "performed_via_github_app" not in c:
+            problem = "verdict has no app-attribution metadata"
+        elif c["performed_via_github_app"] is not None:
+            problem = "verdict was posted through a GitHub App, not directly by the owner"
+        elif not m:
             problem = "first line is not an exact verdict"
         elif m.group(1) != task_id:
             problem = "verdict names another task"
