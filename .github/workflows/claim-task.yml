@@ -3,6 +3,8 @@
 # The only job with contents: write besides verify-lock. The ref-path limit is enforced by our
 # Python code, not by GitHub (see docs/PILOT.md). Claims are permanent in this pilot.
 name: claim-task
+# The run title links this run to exactly one task claim; pilot-status checks it.
+run-name: claim-task ${{ inputs.task_id }}
 on:
   workflow_dispatch:
     inputs:

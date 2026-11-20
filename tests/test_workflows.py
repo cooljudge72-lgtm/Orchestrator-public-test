@@ -63,6 +63,14 @@ class TestWorkflows(unittest.TestCase):
             src = py.read_text()
             self.assertNotRegex(src, r"/merge\b|\"PUT\"|'PUT'", py.name)
 
+    def test_manual_workflows_require_owner_as_actor_and_triggering_actor(self):
+        for name in MANUAL_ONLY:
+            if (WF / name).exists():
+                text = code(name)
+                for guard in ("github.ref == 'refs/heads/main'", "github.actor == github.repository_owner",
+                              "github.triggering_actor == github.repository_owner"):
+                    self.assertIn(guard, text, f"{name}: {guard}")
+
     @unittest.skipUnless((WF / "verify-lock.yml").exists(), "verify-lock.yml not present")
     def test_lock_workflow_is_isolated(self):
         text = code("verify-lock.yml")
@@ -78,6 +86,7 @@ class TestWorkflows(unittest.TestCase):
                       "github.triggering_actor == github.repository_owner", "persist-credentials: false",
                       "python -m lockcheck.claim"):
             self.assertIn(guard, text)
+        self.assertIn("\nrun-name: claim-task ${{ inputs.task_id }}\n", text)   # links run to its claim
         self.assertNotIn("secrets.", text)
 
     @unittest.skipUnless((WF / "pilot-status.yml").exists(), "pilot-status.yml not present")

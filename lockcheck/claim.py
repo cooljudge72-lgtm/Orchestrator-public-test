@@ -47,19 +47,52 @@ def build_identity(env, task):
             "run_attempt": env.get("GITHUB_RUN_ATTEMPT", "1")}
 
 
+SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def tag_name(task_id):
+    return f"claim-{task_id}"
+
+
+def validate_tag_response(resp, identity, message):
+    """Check a POST /git/tags response (schema git-tag). `tagger` is not relied on."""
+    obj = (resp or {}).get("object") or {}
+    checks = [(isinstance(resp, dict), "tag response is not an object"),
+              (bool(SHA.fullmatch(str((resp or {}).get("sha", "")))), "tag response has no valid sha"),
+              ((resp or {}).get("tag") == tag_name(identity["task_id"]), "tag response has the wrong tag name"),
+              ((resp or {}).get("message", "").rstrip("\n") == message, "tag response message differs"),
+              (obj.get("type") == "commit" and obj.get("sha") == identity["sha"], "tag does not target the claimed commit")]
+    for ok, reason in checks:
+        if not ok:
+            raise LockError(reason)
+    return resp["sha"]
+
+
+def validate_ref_response(resp, ref, tag_sha):
+    """Check a POST /git/refs response (schema git-ref)."""
+    obj = (resp or {}).get("object") or {}
+    if not (isinstance(resp, dict) and resp.get("ref") == ref and obj.get("type") == "tag" and obj.get("sha") == tag_sha):
+        raise LockError("claim state unknown: ref response does not confirm the claim")
+
+
 def acquire_claim(gh, repo, identity):
-    """Create the tag object, then the claim ref pointing at it. ACQUIRED / HELD / LockError."""
+    """Create the annotated tag object, then the claim ref pointing at it. ACQUIRED / HELD / LockError.
+    Requests follow GitHub's documented bodies (no optional tagger); responses are validated."""
     ref = claim_ref(identity["task_id"])
+    if not SHA.fullmatch(str(identity.get("sha", ""))):
+        raise LockError("identity has no valid commit sha")
+    message = json.dumps(identity, sort_keys=True)
     try:
         tag = gh.call("POST", f"/repos/{repo}/git/tags", {
-            "tag": f"claim-{identity['task_id']}", "message": json.dumps(identity, sort_keys=True),
-            "object": identity["sha"], "type": "commit"})
-        gh.call("POST", f"/repos/{repo}/git/refs", {"ref": ref, "sha": tag["sha"]})
-        return ACQUIRED
+            "tag": tag_name(identity["task_id"]), "message": message, "object": identity["sha"], "type": "commit"})
+        tag_sha = validate_tag_response(tag, identity, message)
+        created = gh.call("POST", f"/repos/{repo}/git/refs", {"ref": ref, "sha": tag_sha})
     except urllib.error.HTTPError as err:
         if already_exists(err):
             return HELD
         raise LockError(f"claiming {ref} failed with HTTP {err.code}") from None
+    validate_ref_response(created, ref, tag_sha)
+    return ACQUIRED
 
 
 def check_context(env, task_id, agent, task):
@@ -111,6 +144,8 @@ def main(env=os.environ, gh=None, root="."):
     except LockError as err:
         print(f"CLAIM FAILED: {err}")
         return 1
+    # Exit 0 ONLY when this run created the claim: a successful claim-task run is therefore
+    # evidence that it acquired the claim named in its run title.
     print(f"CLAIM {task_id}: {result.upper()}")
     return 0 if result == ACQUIRED else 1
 

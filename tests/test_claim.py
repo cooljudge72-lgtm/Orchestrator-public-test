@@ -54,7 +54,44 @@ class TestClaim(unittest.TestCase):
         self.assertEqual((results.count(ACQUIRED), results.count(HELD)), (1, 9))
         ref = gh.call("GET", f"/repos/{REPO}/git/ref/lockcheck/task-T-001")
         self.assertEqual(ref["object"]["type"], "tag")
-        self.assertEqual(json.loads(gh.tags[ref["object"]["sha"]])["run_id"], "555")
+        self.assertEqual(json.loads(gh.tags[ref["object"]["sha"]]["message"])["run_id"], "555")
+
+    def test_request_bodies_follow_the_documented_contract(self):
+        gh = FakeGitHub()
+        acquire_claim(gh, REPO, build_identity(env(), TASK))
+        tag_req = next(b for m, p, b in gh.requests if p.endswith("/git/tags"))
+        ref_req = next(b for m, p, b in gh.requests if p.endswith("/git/refs"))
+        self.assertEqual(set(tag_req), {"tag", "message", "object", "type"})   # no optional tagger sent
+        self.assertEqual((tag_req["tag"], tag_req["object"], tag_req["type"]), ("claim-T-001", SHA, "commit"))
+        self.assertEqual(set(ref_req), {"ref", "sha"})
+        self.assertEqual(ref_req["ref"], "refs/lockcheck/task-T-001")
+
+    def test_tagger_in_response_is_optional(self):
+        for with_tagger in (True, False):
+            gh = FakeGitHub(tagger_in_response=with_tagger)
+            self.assertEqual(acquire_claim(gh, REPO, build_identity(env(), TASK)), ACQUIRED)
+
+    def test_malformed_tag_response_fails_before_creating_ref(self):
+        good = {"sha": "1" * 40, "tag": "claim-T-001", "message": "", "object": {"type": "commit", "sha": SHA}}
+        for bad in (None, {}, dict(good, sha="x"), dict(good, tag="claim-T-002"),
+                    dict(good, object={"type": "commit", "sha": "d" * 40}), dict(good, object={"type": "tree", "sha": SHA})):
+            gh = FakeGitHub()
+            gh.tag_response_override = bad
+            with self.assertRaises(LockError, msg=bad):
+                acquire_claim(gh, REPO, build_identity(env(), TASK))
+            self.assertEqual(gh.refs, {})
+
+    def test_unconfirmed_ref_response_is_claim_state_unknown(self):
+        for bad in ({}, {"ref": "refs/lockcheck/task-T-002", "object": {"type": "tag", "sha": "1" * 40}},
+                    {"ref": "refs/lockcheck/task-T-001", "object": {"type": "commit", "sha": "1" * 40}}):
+            gh = FakeGitHub()
+            gh.ref_response_override = bad
+            with self.assertRaises(LockError):
+                acquire_claim(gh, REPO, build_identity(env(), TASK))
+
+    def test_invalid_identity_sha_refused(self):
+        with self.assertRaises(LockError):
+            acquire_claim(FakeGitHub(), REPO, build_identity(env(GITHUB_SHA="main"), TASK))
 
     def test_other_errors_fail_closed(self):
         gh = FakeGitHub()
