@@ -1,0 +1,8 @@
+{
+  "task_id": "T-001",
+  "title": "celsius_to_fahrenheit with strict input validation",
+  "agent": "claude",
+  "branch": "pilot/T-001",
+  "allowed_paths": ["pilot/__init__.py", "pilot/temperature.py", "tests/test_temperature.py"],
+  "max_revision_rounds": 2
+}
