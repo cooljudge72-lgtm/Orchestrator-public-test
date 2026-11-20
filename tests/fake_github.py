@@ -13,10 +13,24 @@ def http_error(code, message):
 class FakeGitHub:
     def __init__(self):
         self.refs, self.lock = {}, threading.Lock()
+        self.tags, self.routes, self.tag_count = {}, {}, 0      # routes: exact GET path -> response
         self.create_error = self.delete_error = self.read_error = None
         self.lose_response_once = False
 
     def call(self, method, path, body=None):
+        if method == "GET" and path in self.routes:
+            value = self.routes[path]
+            if isinstance(value, Exception):
+                raise value
+            return value
+        if method == "POST" and path.endswith("/git/tags"):
+            with self.lock:
+                self.tag_count += 1
+                sha = f"{self.tag_count:040x}"
+            self.tags[sha] = body["message"]
+            return {"sha": sha}
+        if method == "GET" and "/git/tags/" in path:
+            return {"message": self.tags[path.rsplit("/", 1)[1]]}
         if method == "POST" and path.endswith("/git/refs"):
             if self.create_error:
                 raise self.create_error
@@ -34,7 +48,8 @@ class FakeGitHub:
             ref = "refs/" + path.split("/git/ref/", 1)[1]
             if ref not in self.refs:
                 raise http_error(404, "Not Found")
-            return {"ref": ref, "object": {"sha": self.refs[ref], "type": "commit"}}
+            sha = self.refs[ref]
+            return {"ref": ref, "object": {"sha": sha, "type": "tag" if sha in self.tags else "commit"}}
         if method == "GET" and "/git/matching-refs/" in path:
             prefix = "refs/" + path.split("/git/matching-refs/", 1)[1]
             return [{"ref": r} for r in self.refs if r.startswith(prefix)]

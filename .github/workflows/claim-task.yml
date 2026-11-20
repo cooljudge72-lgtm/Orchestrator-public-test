@@ -1,0 +1,40 @@
+# MANUAL task claim for the pilot. Creates refs/lockcheck/task-<TASK_ID> atomically (verified
+# create-if-absent lock) pointing at a tag object that records this run's identity.
+# The only job with contents: write besides verify-lock. The ref-path limit is enforced by our
+# Python code, not by GitHub (see docs/PILOT.md). Claims are permanent in this pilot.
+name: claim-task
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: Task id (T-001 style); must exist in tasks/ on main
+        required: true
+        type: string
+      agent:
+        description: Agent that will implement the task
+        required: true
+        type: choice
+        options: [claude]
+permissions: {}
+concurrency:
+  group: claim-task
+  cancel-in-progress: false
+jobs:
+  claim:
+    if: github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TASK_ID: ${{ inputs.task_id }}
+          AGENT: ${{ inputs.agent }}
+        run: python -m lockcheck.claim
