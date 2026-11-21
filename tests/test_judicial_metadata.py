@@ -346,6 +346,156 @@ class ConjunctionDiacriticTests(unittest.TestCase):
                 self.assertEqual(extract_case_metadata(text), EMPTY)
 
 
+class RevisionThreeExampleTests(unittest.TestCase):
+    """Exceptional revision round 3: the seven confirmed failures, verbatim."""
+
+    def test_superscript_after_punctuation_rejects_case_number(self):
+        result = extract_case_metadata("الدعوى رقم 123.² لسنة 2024")
+        self.assertIsNone(result["case_number"])
+        self.assertEqual(result, EMPTY)
+
+    def test_superscript_after_punctuation_rejects_case_year(self):
+        result = extract_case_metadata("الدعوى رقم 123 لسنة 2024.²")
+        self.assertEqual(result["case_number"], "123")
+        self.assertIsNone(result["case_year"])
+
+    def test_superscript_after_punctuation_rejects_date(self):
+        result = extract_case_metadata("صدر الحكم بتاريخ 15/03/2025.²")
+        self.assertIsNone(result["judgment_date"])
+
+    def test_slash_after_punctuation_rejects_case_number(self):
+        result = extract_case_metadata("الاستئناف رقم 123./4 لسنة 2024")
+        self.assertIsNone(result["case_number"])
+        self.assertEqual(result, EMPTY)
+
+    def test_slash_after_punctuation_rejects_date(self):
+        result = extract_case_metadata("صدر الحكم بتاريخ 15/03/2025./1")
+        self.assertIsNone(result["judgment_date"])
+
+    def test_open_fathatan_hides_no_embedded_judgment_trigger(self):
+        result = extract_case_metadata("مࣰصدر الحكم بتاريخ 15/03/2025")
+        self.assertEqual(result, EMPTY)
+
+    def test_open_fathatan_hides_no_embedded_case_trigger(self):
+        result = extract_case_metadata("نصࣰالدعوى رقم 123 لسنة 2024")
+        self.assertEqual(result, EMPTY)
+
+
+class UnicodeTokenEndTests(unittest.TestCase):
+    """Round 3, defect A: after a punctuation run only text may follow."""
+
+    # Numeric characters outside [0-9] and numeric connectors, placed right
+    # after a punctuation run.
+    INVALID_AFTER_PUNCT = (
+        "²", "³", "¹", "½", "①", "Ⅳ", "५", "٣", "۳", "/4", "-1",
+        "+1", "٫", "٬", "٫5", "٬5", "ً5", "ࣰ5", "‏5",
+        "‌²", "(5", "«٣", "(½", "-/²", "%1",
+    )
+    # Text, symbols and boundaries that may follow a punctuation run as
+    # long as no numeric character appears before the next space/letter.
+    VALID_AFTER_PUNCT = ("", " ", "\n", "ثم", "x", "ً", "‏",
+                         "‏ثم", "ًثم", "(انتهى)", "«نص»", "-",
+                         "/", "%", "۞", "؍", "(", "- ثم")
+
+    def _check(self, build, key, expected):
+        for punct in (".", "،", ")", ").", "..", "؛", "؟"):
+            for tail in self.INVALID_AFTER_PUNCT:
+                with self.subTest(punct=punct, tail=tail, valid=False):
+                    self.assertIsNone(
+                        extract_case_metadata(build(punct + tail))[key])
+            for tail in self.VALID_AFTER_PUNCT:
+                with self.subTest(punct=punct, tail=tail, valid=True):
+                    self.assertEqual(
+                        extract_case_metadata(build(punct + tail))[key],
+                        expected)
+
+    def test_case_number(self):
+        self._check(lambda t: "الدعوى رقم ١2٣" + t, "case_number", "123")
+
+    def test_case_year(self):
+        self._check(lambda t: "الاستئناف رقم 7 لسنة ٢0٢4" + t,
+                    "case_year", "2024")
+
+    def test_judgment_date(self):
+        self._check(lambda t: "صدر الحكم بتاريخ ١5/0٣/٢٠25" + t,
+                    "judgment_date", "2025-03-15")
+
+    def test_numeric_characters_attached_directly_rejected(self):
+        for tail in ("²", "½", "①", "Ⅳ", "ࣰ", "́"):
+            with self.subTest(tail=tail):
+                self.assertEqual(
+                    extract_case_metadata("الدعوى رقم ١٢٣" + tail), EMPTY)
+                self.assertIsNone(extract_case_metadata(
+                    "صدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥" + tail)["judgment_date"])
+
+    def test_earlier_accepted_examples_unchanged(self):
+        self.assertEqual(
+            extract_case_metadata("الدعوى رقم ١٢٣ لسنة ٢٠٢٤،ثم نُظرت"),
+            {"case_number": "123", "case_year": "2024",
+             "judgment_date": None})
+        self.assertEqual(
+            extract_case_metadata("صدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥،ثم أُعلن")
+            ["judgment_date"], "2025-03-15")
+        self.assertEqual(
+            extract_case_metadata("(الاستئناف رقم 45 لسنة 2025).")
+            ["case_year"], "2025")
+
+
+class UnicodeWordStartTests(unittest.TestCase):
+    """Round 3, defect B: combining marks never expose embedded triggers."""
+
+    # Combining marks from several Unicode blocks (Arabic, Arabic
+    # Extended-A, Arabic Supplement-adjacent, Latin combining).
+    MARKS = ("ࣰ", "ࣱ", "ࣲ", "ࣤ", "ٖ", "ٟ",
+             "ؐ", "ۡ", "َ", "́")
+
+    def test_marks_inside_word_before_trigger_rejected(self):
+        for mark in self.MARKS:
+            for text in ("م" + mark + "صدر الحكم بتاريخ 15/03/2025",
+                         "نص" + mark + "الدعوى رقم 123 لسنة 2024",
+                         "أ" + mark + "حكمت المحكمة بتاريخ 15/03/2025",
+                         "م" + mark + mark + "صدر الحكم بتاريخ 15/03/2025",
+                         " " + mark + "صدر الحكم بتاريخ 15/03/2025"):
+                with self.subTest(mark=ascii(mark), text=ascii(text)):
+                    self.assertEqual(extract_case_metadata(text), EMPTY)
+
+    def test_format_characters_do_not_hide_word(self):
+        for text in ("م‌صدر الحكم بتاريخ 15/03/2025",
+                     "نص‍الدعوى رقم 123",
+                     "مو‌الدعوى رقم 123"):
+            with self.subTest(text=ascii(text)):
+                self.assertEqual(extract_case_metadata(text), EMPTY)
+
+    def test_conjunction_with_any_marks_accepted(self):
+        for mark in self.MARKS + ("َّ", ""):
+            for conj in ("و", "ف"):
+                with self.subTest(conj=conj, mark=ascii(mark)):
+                    result = extract_case_metadata(
+                        conj + mark + "الدعوى رقم ٩ لسنة ٢٠٢٤ "
+                        + conj + mark + "صدر الحكم بتاريخ 15/03/2025")
+                    self.assertEqual(
+                        result, {"case_number": "9", "case_year": "2024",
+                                 "judgment_date": "2025-03-15"})
+
+    def test_conjunction_inside_word_rejected(self):
+        for text in ("موَالدعوى رقم ٩", "نحوࣰصدر الحكم بتاريخ 15/03/2025",
+                     "َوَالدعوى رقم ٩", "ـوالدعوى رقم ٩",
+                     "ووالدعوى رقم ٩"):
+            with self.subTest(text=ascii(text)):
+                self.assertEqual(extract_case_metadata(text), EMPTY)
+
+    def test_standalone_triggers_after_boundaries_accepted(self):
+        for prefix in ("", " ", "\n", "(", "«", "،", ".", "‏",
+                       " ‏", "‏وَ", "1. "):
+            with self.subTest(prefix=ascii(prefix)):
+                result = extract_case_metadata(
+                    prefix + "الدعوى رقم ٩ لسنة ٢٠٢٤ "
+                    + prefix + "صدر الحكم بتاريخ 15/03/2025")
+                self.assertEqual(
+                    result, {"case_number": "9", "case_year": "2024",
+                             "judgment_date": "2025-03-15"})
+
+
 class InputValidationTests(unittest.TestCase):
     def test_non_string_raises_value_error(self):
         for value in (None, 123, b"\xd8\xa7", ["الدعوى رقم ١"], 12.5, True):
