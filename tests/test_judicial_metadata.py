@@ -241,6 +241,111 @@ class TriggerBoundaryTests(unittest.TestCase):
                 self.assertEqual(extract_case_metadata(text)[key], expected)
 
 
+class RevisionTwoExampleTests(unittest.TestCase):
+    """Revision round 2: the eight confirmed examples, verbatim."""
+
+    def test_punctuation_then_arabic_keeps_case_number(self):
+        result = extract_case_metadata("الدعوى رقم ١٢٣،ثم نُظرت")
+        self.assertEqual(result["case_number"], "123")
+
+    def test_punctuation_then_arabic_keeps_case_year(self):
+        result = extract_case_metadata("الدعوى رقم ١٢٣ لسنة ٢٠٢٤،ثم نُظرت")
+        self.assertEqual(result["case_number"], "123")
+        self.assertEqual(result["case_year"], "2024")
+
+    def test_punctuation_then_arabic_keeps_judgment_date(self):
+        result = extract_case_metadata("صدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥،ثم أُعلن")
+        self.assertEqual(result["judgment_date"], "2025-03-15")
+
+    def test_repeated_punctuation_numeric_case_number_rejected(self):
+        result = extract_case_metadata("الدعوى رقم 123..5 لسنة 2024")
+        self.assertEqual(result, EMPTY)
+
+    def test_repeated_punctuation_numeric_year_rejected(self):
+        result = extract_case_metadata("الاستئناف رقم 123 لسنة 2024,,5")
+        self.assertEqual(result["case_number"], "123")
+        self.assertIsNone(result["case_year"])
+
+    def test_repeated_punctuation_numeric_date_rejected(self):
+        result = extract_case_metadata("صدر الحكم بتاريخ 15/03/2025..5")
+        self.assertIsNone(result["judgment_date"])
+
+    def test_vowelled_conjunction_case(self):
+        result = extract_case_metadata("وَالدعوى رقم ٩ لسنة ٢٠٢٤")
+        self.assertEqual(result["case_number"], "9")
+        self.assertEqual(result["case_year"], "2024")
+
+    def test_vowelled_conjunction_judgment(self):
+        result = extract_case_metadata("فَصدر الحكم بتاريخ 15/03/2025")
+        self.assertEqual(result["judgment_date"], "2025-03-15")
+
+
+class TokenBoundaryPolicyTests(unittest.TestCase):
+    """Revision round 2: one whole-token policy for every numeric field."""
+
+    # Text after the token that must be accepted.
+    VALID_TAILS = ("", " ", "\n", ".", "،", "؛", "؟", "!", ":", ")", ").",
+                   "»", "...", "؛؛", "،ثم", ".ثم", ")،وبعد", "، وبعد",
+                   ".ً", "،x")
+    # Text after the token that must reject the whole token.
+    INVALID_TAILS = (".5", "..5", ",,5", "،5", "،،٥", ")5", ").5", "...٣",
+                     ".५", ",٫", "٫5", "٬000", "x", "أ", "५", "/1", "-1",
+                     "_", "َ", "ـ")
+
+    def _check(self, build, key, expected):
+        for tail in self.VALID_TAILS:
+            with self.subTest(tail=tail, valid=True):
+                self.assertEqual(extract_case_metadata(build(tail))[key],
+                                 expected)
+        for tail in self.INVALID_TAILS:
+            with self.subTest(tail=tail, valid=False):
+                self.assertIsNone(extract_case_metadata(build(tail))[key])
+
+    def test_case_number_policy(self):
+        self._check(lambda t: "الدعوى رقم ١2٣" + t, "case_number", "123")
+
+    def test_case_year_policy(self):
+        self._check(lambda t: "الاستئناف رقم 7 لسنة ٢0٢4" + t,
+                    "case_year", "2024")
+
+    def test_judgment_date_policy(self):
+        self._check(lambda t: "صدر الحكم بتاريخ ١5/0٣/٢٠25" + t,
+                    "judgment_date", "2025-03-15")
+
+    def test_malformed_case_number_never_yields_year(self):
+        for tail in self.INVALID_TAILS:
+            with self.subTest(tail=tail):
+                text = "الدعوى رقم ١٢٣" + tail + " لسنة ٢٠٢٤"
+                self.assertEqual(extract_case_metadata(text), EMPTY)
+
+
+class ConjunctionDiacriticTests(unittest.TestCase):
+    """Revision round 2: vowelled و/ف prefixes; embedded triggers still fail."""
+
+    def test_conjunction_with_marks_accepted(self):
+        for prefix in ("و", "ف", "وَ", "فَ", "وُ", "وِ", "وْ", "فَّ"):
+            with self.subTest(prefix=prefix):
+                result = extract_case_metadata(
+                    prefix + "الاستئناف رقم ٤ لسنة ٢٠٢٣ "
+                    + prefix + "صدر الحكم بتاريخ ٠١/٠٢/٢٠٢٤")
+                self.assertEqual(
+                    result, {"case_number": "4", "case_year": "2023",
+                             "judgment_date": "2024-02-01"})
+
+    def test_embedded_triggers_still_rejected_with_marks(self):
+        for text in ("مَصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "وَمصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "أَحكمت المحكمة بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "xوَصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "مَوَصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "ـوَصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "بَالدعوى رقم ٥ لسنة ٢٠٢٤",
+                     "كَالدعوى رقم ٥ لسنة ٢٠٢٤",
+                     "مَوَالدعوى رقم ٥ لسنة ٢٠٢٤"):
+            with self.subTest(text=text):
+                self.assertEqual(extract_case_metadata(text), EMPTY)
+
+
 class InputValidationTests(unittest.TestCase):
     def test_non_string_raises_value_error(self):
         for value in (None, 123, b"\xd8\xa7", ["الدعوى رقم ١"], 12.5, True):

@@ -21,25 +21,38 @@ _DIGIT_TABLE = str.maketrans(
 # Patterns run on digit-normalized text and use [0-9] explicitly so that
 # other Unicode digit scripts are never matched by accident.
 
+# Arabic diacritics (harakat, tanween, shadda, sukun, dagger alif).
+_MARKS = r"ً-ٰٟ"
+
 # Trigger phrases must start a word. They may not follow a letter, digit,
 # underscore, Arabic diacritic or tatweel, so "صدر" inside "مصدر" or
 # "حكمت" inside "أحكمت" never matches. The only allowed attached prefix is
-# the conjunction و or ف ("وصدر الحكم", "والدعوى رقم").
+# the conjunction و or ف, optionally carrying diacritics ("وصدر الحكم",
+# "وَالدعوى رقم", "فَصدر الحكم").
 _WORD_START = (
-    r"(?<![\wؐ-ؚـً-ٰٟۖ-ۭ])"
-    r"[وف]?"
+    r"(?<![\wؐ-ؚـۖ-ۭ" + _MARKS + r"])"
+    r"(?:[وف][" + _MARKS + r"]*)?"
 )
 
 # Ordinary sentence punctuation that may directly follow a token.
 _PUNCT = r"\.,،؛;:!?؟)\]}»\"'”’…"
 
-# A numeric token must end at whitespace, at the end of the text, or at
-# sentence punctuation that is itself followed by whitespace, the end of the
-# text or more punctuation. This rejects the whole token, rather than
-# accepting a valid-looking prefix, when it continues with a decimal part
-# ("123.5", "١٢٣٫٥"), letters ("123أ", "2025x"), other digit scripts, a
-# slash, a hyphen or a diacritic.
-_TOKEN_END = r"(?=\s|$|[%s](?:\s|$|[%s]))" % (_PUNCT, _PUNCT)
+# Whole-token boundary policy for every numeric token (case number, year,
+# judgment date). Right after the token there must be one of:
+#   * whitespace or the end of the text; or
+#   * a run of sentence punctuation, taken as a whole (the longest run),
+#     that is NOT followed by a digit of any script or by an Arabic decimal
+#     or thousands separator (U+066B, U+066C).
+# So punctuation separates the token from what follows, including Arabic
+# text written without a space ("١٢٣،ثم", "2025)."), but a numeric
+# continuation after punctuation ("123.5", "123..5", "2024,,5", "2025).5")
+# rejects the whole token. Anything else attached directly (letters,
+# digits of other scripts, Arabic decimal separator, slash, hyphen,
+# underscore, diacritics) also rejects the whole token. A token is never
+# shortened to a valid-looking prefix.
+_TOKEN_END = (
+    r"(?=\s|$|[%s]+(?![%s\d٫٬]))" % (_PUNCT, _PUNCT)
+)
 
 # "الدعوى رقم 123" / "الاستئناف رقم 456", optionally followed by
 # "لسنة YYYY". The year group is optional so a case number without a year
