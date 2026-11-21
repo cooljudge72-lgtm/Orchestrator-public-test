@@ -1,0 +1,12 @@
+{
+  "task_id": "T-002",
+  "title": "Arabic Judicial Text Metadata Extractor",
+  "agent": "claude",
+  "branch": "pilot/T-002",
+  "allowed_paths": [
+    "pilot/__init__.py",
+    "pilot/judicial_metadata.py",
+    "tests/test_judicial_metadata.py"
+  ],
+  "max_revision_rounds": 2
+}
