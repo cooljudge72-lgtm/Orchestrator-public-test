@@ -126,6 +126,121 @@ class WholeDocumentTests(unittest.TestCase):
         self.assertIs(package_export, extract_case_metadata)
 
 
+class MalformedNumberTokenTests(unittest.TestCase):
+    """Revision round 1, defect 1: whole case-number and year tokens."""
+
+    def test_malformed_case_number_rejected_not_truncated(self):
+        for token in ("123.5", "١٢٣٫٥", "123,5", "123أ", "123abc", "123_",
+                      "123५", "123٨x", "123/4", "123-ب", "123ً"):
+            with self.subTest(token=token):
+                result = extract_case_metadata(
+                    "الدعوى رقم " + token + " لسنة ٢٠٢٤")
+                self.assertEqual(result, EMPTY)
+
+    def test_malformed_year_rejected_not_truncated(self):
+        for token in ("2024.5", "٢٠٢٤٫٥", "2024x", "٢٠٢٤هـ", "2024५",
+                      "2024/1", "2024-ب"):
+            with self.subTest(token=token):
+                result = extract_case_metadata(
+                    "الاستئناف رقم ٧٧ لسنة " + token)
+                self.assertEqual(result["case_number"], "77")
+                self.assertIsNone(result["case_year"])
+
+    def test_sentence_punctuation_after_tokens_accepted(self):
+        cases = [
+            ("الدعوى رقم ١٢٣ لسنة ٢٠٢٤.", "123", "2024"),
+            ("الدعوى رقم ١٢٣ لسنة ٢٠٢٤، وقد", "123", "2024"),
+            ("(الاستئناف رقم 45 لسنة 2025)", "45", "2025"),
+            ("(الاستئناف رقم 45 لسنة 2025).", "45", "2025"),
+            ("الدعوى رقم ٩، المنظورة", "9", None),
+            ("الدعوى رقم: ٩ لسنة ٢٠٢٢؛", "9", "2022"),
+            ("هل نظرت الدعوى رقم 8 لسنة 2021؟", "8", "2021"),
+        ]
+        for text, number, year in cases:
+            with self.subTest(text=text):
+                result = extract_case_metadata(text)
+                self.assertEqual(result["case_number"], number)
+                self.assertEqual(result["case_year"], year)
+
+    def test_later_well_formed_reference_still_found(self):
+        text = "الدعوى رقم 12.5 خطأ، والصحيح الدعوى رقم 12 لسنة 2024"
+        result = extract_case_metadata(text)
+        self.assertEqual(result["case_number"], "12")
+        self.assertEqual(result["case_year"], "2024")
+
+
+class MalformedDateTokenTests(unittest.TestCase):
+    """Revision round 1, defect 2: the whole judgment-date token."""
+
+    def test_attached_suffix_rejects_date(self):
+        for date in ("15/03/2025x", "15/03/2025أ", "١٥/٠٣/٢٠٢٥م",
+                     "15/03/2025.5", "١٥/٠٣/٢٠٢٥٫٥", "15/03/2025५",
+                     "15/03/2025_", "15/03/2025-1", "15/03/2025َ"):
+            with self.subTest(date=date):
+                result = extract_case_metadata("صدر الحكم بتاريخ " + date)
+                self.assertIsNone(result["judgment_date"])
+
+    def test_unsupported_digits_inside_date_rejected(self):
+        for date in ("1५/03/2025", "15/0३/2025", "15/03/202५"):
+            with self.subTest(date=date):
+                result = extract_case_metadata("صدر الحكم بتاريخ " + date)
+                self.assertIsNone(result["judgment_date"])
+
+    def test_sentence_punctuation_after_date_accepted(self):
+        for suffix in (".", "،", "؛", ":", "!", "؟", ")", ").", "، وبه",
+                       ". ", "\n", "»"):
+            with self.subTest(suffix=suffix):
+                result = extract_case_metadata(
+                    "صدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥" + suffix)
+                self.assertEqual(result["judgment_date"], "2025-03-15")
+
+    def test_malformed_then_valid_date_uses_valid(self):
+        text = ("صدر الحكم بتاريخ 15/03/2025x ثم صدر الحكم بتاريخ "
+                "16/03/2025.")
+        self.assertEqual(extract_case_metadata(text)["judgment_date"],
+                         "2025-03-16")
+
+
+class TriggerBoundaryTests(unittest.TestCase):
+    """Revision round 1, defect 3: triggers must not match inside words."""
+
+    def test_judgment_trigger_inside_word_ignored(self):
+        for text in ("مصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "مُصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "مـصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "أحكمت المحكمة بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "xصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "1صدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                     "والمصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥"):
+            with self.subTest(text=text):
+                self.assertIsNone(extract_case_metadata(text)["judgment_date"])
+
+    def test_case_trigger_inside_word_ignored(self):
+        for text in ("كالدعوى رقم ٥ لسنة ٢٠٢٤",
+                     "مالاستئناف رقم ٥ لسنة ٢٠٢٤",
+                     "اللدعوى رقم ٥",
+                     "ـالدعوى رقم ٥",
+                     "xالاستئناف رقم ٥"):
+            with self.subTest(text=text):
+                self.assertEqual(extract_case_metadata(text), EMPTY)
+
+    def test_standalone_and_conjunction_phrases_preserved(self):
+        cases = [
+            ("وصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥", "judgment_date", "2025-03-15"),
+            ("فصدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥", "judgment_date", "2025-03-15"),
+            ("بعد المداولة، حكمت المحكمة بتاريخ 1/2/2024",
+             "judgment_date", "2024-02-01"),
+            ("الحكم الصادر بتاريخ ٠٩/١٢/٢٠٢٣", "judgment_date", "2023-12-09"),
+            ("(صدر الحكم بتاريخ ١٥/٠٣/٢٠٢٥)", "judgment_date", "2025-03-15"),
+            ("والدعوى رقم ٥ لسنة ٢٠٢٤", "case_number", "5"),
+            ("في الاستئناف رقم ٦ لسنة ٢٠٢٤", "case_number", "6"),
+            ("«الاستئناف رقم ٦»", "case_number", "6"),
+        ]
+        for text, key, expected in cases:
+            with self.subTest(text=text):
+                self.assertEqual(extract_case_metadata(text)[key], expected)
+
+
 class InputValidationTests(unittest.TestCase):
     def test_non_string_raises_value_error(self):
         for value in (None, 123, b"\xd8\xa7", ["الدعوى رقم ١"], 12.5, True):

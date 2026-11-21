@@ -20,24 +20,50 @@ _DIGIT_TABLE = str.maketrans(
 
 # Patterns run on digit-normalized text and use [0-9] explicitly so that
 # other Unicode digit scripts are never matched by accident.
-#
+
+# Trigger phrases must start a word. They may not follow a letter, digit,
+# underscore, Arabic diacritic or tatweel, so "صدر" inside "مصدر" or
+# "حكمت" inside "أحكمت" never matches. The only allowed attached prefix is
+# the conjunction و or ف ("وصدر الحكم", "والدعوى رقم").
+_WORD_START = (
+    r"(?<![\wؐ-ؚـً-ٰٟۖ-ۭ])"
+    r"[وف]?"
+)
+
+# Ordinary sentence punctuation that may directly follow a token.
+_PUNCT = r"\.,،؛;:!?؟)\]}»\"'”’…"
+
+# A numeric token must end at whitespace, at the end of the text, or at
+# sentence punctuation that is itself followed by whitespace, the end of the
+# text or more punctuation. This rejects the whole token, rather than
+# accepting a valid-looking prefix, when it continues with a decimal part
+# ("123.5", "١٢٣٫٥"), letters ("123أ", "2025x"), other digit scripts, a
+# slash, a hyphen or a diacritic.
+_TOKEN_END = r"(?=\s|$|[%s](?:\s|$|[%s]))" % (_PUNCT, _PUNCT)
+
 # "الدعوى رقم 123" / "الاستئناف رقم 456", optionally followed by
 # "لسنة YYYY". The year group is optional so a case number without a year
-# is still recognized; a year that is not exactly four digits is not
-# captured.
+# is still recognized. A malformed year token is not captured, and a year
+# that is not exactly four digits is rejected later by _valid_year.
 _CASE_RE = re.compile(
-    r"(?:الدعوى|الاستئناف)\s+رقم\s*:?\s*([0-9]+)(?![0-9])"
-    r"(?:\s+لسنة\s+([0-9]+)(?![0-9]))?"
+    _WORD_START
+    + r"(?:الدعوى|الاستئناف)\s+رقم\s*:?\s*([0-9]+)"
+    + _TOKEN_END
+    + r"(?:\s+لسنة\s+([0-9]+)" + _TOKEN_END + r")?"
 )
 
 # A DD/MM/YYYY date introduced by a judgment phrase, e.g.
 # "صدر الحكم بتاريخ 15/03/2025" or "صدر هذا الحكم بتاريخ ...".
 # Requiring the judgment phrase avoids reporting another date in the text
-# (such as a filing date) as the judgment date.
+# (such as a filing date) as the judgment date. The whole date token must
+# be well formed: nothing may be attached after the year except sentence
+# punctuation.
 _JUDGMENT_DATE_RE = re.compile(
-    r"(?:صدر(?:\s+هذا)?\s+الحكم|الحكم\s+الصادر|حكمت\s+المحكمة)"
-    r"\s+بتاريخ\s*:?\s*"
-    r"(?<![0-9])([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})(?![0-9/])"
+    _WORD_START
+    + r"(?:صدر(?:\s+هذا)?\s+الحكم|الحكم\s+الصادر|حكمت\s+المحكمة)"
+    + r"\s+بتاريخ\s*:?\s*"
+    + r"([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})"
+    + _TOKEN_END
 )
 
 
