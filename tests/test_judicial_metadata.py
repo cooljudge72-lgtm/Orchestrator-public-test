@@ -877,6 +877,86 @@ class AcceptanceTableTests(unittest.TestCase):
                     extract_case_metadata(value)
 
 
+class EdgeBidiBarrierTests(unittest.TestCase):
+    """Codex review of PR #8: a unit made only of bidi controls is a barrier.
+
+    Edge stripping applies to non-empty original units only; an original
+    unit consisting entirely of bidi controls must not make the units on
+    either side adjacent (trigger words, value, "لسنة", year).
+    """
+
+    RLM = "‏"
+
+    def test_review_regressions(self):
+        rows = (
+            ("CDX-1", "الدعوى رقم ‏ ١٢٣ لسنة ٢٠٢٤", EMPTY),
+            ("CDX-2", "الدعوى رقم ١٢٣ ‏ لسنة ٢٠٢٤", _triple("123")),
+            ("CDX-3", "صدر ‏ الحكم بتاريخ ١٥/٠٣/٢٠٢٥", EMPTY),
+        )
+        for row_id, text, expected in rows:
+            with self.subTest(id=row_id, text=ascii(text)):
+                self.assertEqual(extract_case_metadata(text), expected)
+
+    def test_barrier_between_trigger_words(self):
+        for controls in ("‏", "‎", "؜", "⁦⁩",
+                         "‏‎⁧⁨"):
+            for text in ("الدعوى " + controls + " رقم ١٢٣",
+                         "الاستئناف " + controls + " رقم١٢٣",
+                         "صدر " + controls + " الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                         "صدر الحكم " + controls + " بتاريخ ١٥/٠٣/٢٠٢٥",
+                         "صدر " + controls + " هذا الحكم بتاريخ ١٥/٠٣/٢٠٢٥",
+                         "حكمت " + controls + " المحكمة بتاريخ ١٥/٠٣/٢٠٢٥"):
+                with self.subTest(text=ascii(text)):
+                    self.assertEqual(extract_case_metadata(text), EMPTY)
+
+    def test_barrier_between_introducer_and_separated_value(self):
+        for text in ("الدعوى رقم ‏ ١٢٣",
+                     "الدعوى رقم: ‏ ١٢٣",
+                     "الدعوى رقم : ‏ ١٢٣",
+                     "الدعوى رقم ‏ : ١٢٣",
+                     "الدعوى رقم ‏ :١٢٣",
+                     "صدر الحكم بتاريخ ‏ ١٥/٠٣/٢٠٢٥",
+                     "صدر الحكم بتاريخ: ‏ ١٥/٠٣/٢٠٢٥",
+                     "صدر الحكم بتاريخ : ‏ ١٥/٠٣/٢٠٢٥"):
+            with self.subTest(text=ascii(text)):
+                self.assertEqual(extract_case_metadata(text), EMPTY)
+
+    def test_barrier_blocks_year_linkage(self):
+        # Separated and attached (compact) case numbers.
+        for text in ("الدعوى رقم ١٢٣ ‏ لسنة ٢٠٢٤",
+                     "الدعوى رقم ١٢٣ لسنة ‏ ٢٠٢٤",
+                     "الدعوى رقم١٢٣ ‏ لسنة ٢٠٢٤",
+                     "الدعوى رقم:١٢٣ ‏ لسنة ٢٠٢٤",
+                     "الدعوى رقم: ١٢٣ لسنة ‏ ٢٠٢٤",
+                     "الدعوى رقم١٢٣ لسنة ⁦⁩ ٢٠٢٤"):
+            with self.subTest(text=ascii(text)):
+                self.assertEqual(extract_case_metadata(text),
+                                 _triple("123"))
+
+    def test_barrier_does_not_borrow_from_later_reference(self):
+        self.assertEqual(
+            extract_case_metadata("الدعوى رقم ‏ ١٢٣ لسنة ٢٠٢٤ "
+                                  "ثم الاستئناف رقم ٤٥٦ لسنة ٢٠٢٥"),
+            _triple("456", "2025"))
+
+    def test_edge_stripping_on_nonempty_units_preserved(self):
+        rows = (
+            ("الدعوى رقم ‏١٢٣ لسنة ٢٠٢٤", _triple("123", "2024")),
+            ("الدعوى رقم ١٢٣‏ لسنة ‏٢٠٢٤‏",
+             _triple("123", "2024")),
+            ("‏الدعوى‏ ‏رقم‏ ١٢٣", _triple("123")),
+            ("الدعوى رقم‏ ١٢٣ لسنة‏ ٢٠٢٤", _triple("123", "2024")),
+            ("صدر الحكم بتاريخ‏ ‏١٥/٠٣/٢٠٢٥‏",
+             _triple(date="2025-03-15")),
+            ("الدعوى  رقم \t ١٢٣\n\nلسنة ٢٠٢٤", _triple("123", "2024")),
+            ("الدعوى رقم ١٢٣ لسنة ٢٠٢٤ ‏", _triple("123", "2024")),
+            ("‏ الدعوى رقم ١٢٣", _triple("123")),
+        )
+        for text, expected in rows:
+            with self.subTest(text=ascii(text)):
+                self.assertEqual(extract_case_metadata(text), expected)
+
+
 class LongInputTests(unittest.TestCase):
     """Malformed inputs of about 40,000 characters finish in linear time."""
 

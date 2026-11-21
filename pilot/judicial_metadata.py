@@ -9,7 +9,9 @@ Design (closed allowlists, whole-unit validation):
 
 1. Lexer. The text is split into units on an explicit whitespace set
    (space, tab, LF, CR, NBSP) and each unit keeps its original offsets.
-   Bidi controls are dropped only at the outer edges of an original unit.
+   Bidi controls are dropped only at the outer edges of an original unit;
+   a unit made only of bidi controls stays as an empty unit, so it still
+   separates its neighbours (they are not adjacent).
 2. Triggers. A trigger phrase starts at the beginning of a unit, optionally
    after one opening wrapper and one و/ف conjunction carrying harakat. Its
    words must be whole units, except that the last word (رقم / بتاريخ) may
@@ -81,8 +83,10 @@ def _units(text):
     """Split ``text`` into units of non-whitespace characters.
 
     Returns a list of ``(start, end)`` offsets into ``text``, with edge bidi
-    controls already excluded from each unit. A unit made only of bidi
-    controls is dropped.
+    controls already excluded from each unit. An original unit made only of
+    bidi controls is kept as an empty unit (``start == end``): it matches no
+    trigger word, no value and no "لسنة", so it remains a barrier between
+    the units around it.
     """
     units = []
     size = len(text)
@@ -94,12 +98,13 @@ def _units(text):
         while i < size and text[i] not in _WHITESPACE:
             i += 1
         end = i
+        if start == end:
+            break  # trailing whitespace: no original unit
         while start < end and text[start] in _EDGE_BIDI:
             start += 1
         while end > start and text[end - 1] in _EDGE_BIDI:
             end -= 1
-        if start < end:
-            units.append((start, end))
+        units.append((start, end))
     return units
 
 
