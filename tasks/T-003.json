@@ -1,0 +1,31 @@
+{
+  "task_id": "T-003",
+  "title": "GitHub-coordinated Claude-Codex review loop (NEW DRAFT rev 2, not owner-approved)",
+  "agent": "claude",
+  "branch": "pilot/T-003",
+  "allowed_paths": [
+    "orchestrator/__init__.py",
+    "orchestrator/state.py",
+    "tests/test_orchestrator_state.py",
+    "orchestrator/cycle.py",
+    "tests/test_orchestrator_cycle.py",
+    "orchestrator/github_adapter.py",
+    "tests/test_orchestrator_github.py"
+  ],
+  "stages": {
+    "1": [
+      "orchestrator/__init__.py",
+      "orchestrator/state.py",
+      "tests/test_orchestrator_state.py"
+    ],
+    "2": [
+      "orchestrator/cycle.py",
+      "tests/test_orchestrator_cycle.py"
+    ],
+    "3": [
+      "orchestrator/github_adapter.py",
+      "tests/test_orchestrator_github.py"
+    ]
+  },
+  "max_revision_rounds": 2
+}
