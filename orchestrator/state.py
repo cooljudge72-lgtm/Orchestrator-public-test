@@ -34,6 +34,10 @@ def transition(snapshot, event, *, repository=None, head_sha, actor, ci_passed=F
     and the snapshot, and revision_rounds must be an int (not bool) within
     0..MAX_ROUNDS. snapshot.state must be a str in STATES. Missing or
     malformed values block; they never raise.
+
+    CLAIM_ACCEPTED is the only event exempt from requiring allowed_paths to be
+    True: no implementation (and so no path evidence) exists yet. The gate must
+    still be a bool, and every later gated event requires allowed_paths True.
     """
     if not isinstance(snapshot, Snapshot):
         raise TypeError("snapshot must be Snapshot")
@@ -46,7 +50,8 @@ def transition(snapshot, event, *, repository=None, head_sha, actor, ci_passed=F
     if (type(repository) is not str or repository != PUBLIC_REPOSITORY
             or type(snapshot.repository) is not str
             or snapshot.repository != PUBLIC_REPOSITORY
-            or claim_verified is not True or allowed_paths is not True
+            or claim_verified is not True
+            or (event != "CLAIM_ACCEPTED" and allowed_paths is not True)
             or not isinstance(head_sha, str) or len(head_sha) != 40
             or any(c not in "0123456789abcdef" for c in head_sha)
             or type(snapshot.revision_rounds) is not int
