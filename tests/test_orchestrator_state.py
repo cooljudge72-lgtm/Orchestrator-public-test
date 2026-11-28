@@ -53,8 +53,13 @@ class StateTests(unittest.TestCase):
         s = Snapshot(REPO, "T-003", A, "CLAIMED")
         self.assertEqual(transition(s, "CLAIM_ACCEPTED", repository=REPO,
                          head_sha=A, actor="owner").state, "BLOCKED")
+        # S2-1 (approved): CLAIM_ACCEPTED is exempt from the path gate, so
+        # unverified paths now block at the first implementation instead.
         self.assertEqual(step(s, "CLAIM_ACCEPTED", actor="owner",
-                              allowed_paths=False).state, "BLOCKED")
+                              allowed_paths=False).state, "IMPLEMENTING")
+        self.assertEqual(step(Snapshot(REPO, "T-003", A, "IMPLEMENTING"),
+                              "IMPLEMENTED", B, allowed_paths=False).state,
+                         "BLOCKED")
         self.assertEqual(transition(s, "CLAIM_ACCEPTED", repository="other/repo",
                          head_sha=A, actor="owner", claim_verified=True).state, "BLOCKED")
 
@@ -82,8 +87,9 @@ NOT_TRUE = (False, None, 0, 1, 1.0, "yes", "True", "", ["ok"], {"ok": True},
 def gated(event):
     """(starting snapshot, actor, new head, gates the event depends on)."""
     return {
+        # S2-1 (approved): CLAIM_ACCEPTED does not depend on allowed_paths.
         "CLAIM_ACCEPTED": (Snapshot(REPO, "T-003", A, "CLAIMED"), "owner", A,
-                           ("allowed_paths", "claim_verified")),
+                           ("claim_verified",)),
         "IMPLEMENTED": (Snapshot(REPO, "T-003", A, "IMPLEMENTING"), "claude", B,
                         ("allowed_paths", "claim_verified")),
         "REVIEW_CHANGES": (Snapshot(REPO, "T-003", A, "REVIEWING"), "codex", A,
@@ -247,6 +253,70 @@ class SnapshotStateTypeTests(unittest.TestCase):
     def test_valid_states_unchanged(self):
         s = Snapshot(REPO, "T-003", A, "REVIEWING")
         self.assertEqual(review_changes(s).state, "REVISING")
+
+
+
+class ClaimPathExemptionTests(unittest.TestCase):
+    """S2-1: only CLAIM_ACCEPTED is exempt from requiring allowed_paths True."""
+
+    def claim(self, snapshot=None, actor="owner", event="CLAIM_ACCEPTED", **gates):
+        snapshot = snapshot or Snapshot(REPO, "T-003", A, "CLAIMED")
+        gates.setdefault("claim_verified", True)
+        return transition(snapshot, event, repository=REPO, head_sha=A,
+                          actor=actor, **gates).state
+
+    def test_claim_needs_no_path_evidence(self):
+        self.assertEqual(self.claim(), "IMPLEMENTING")
+        self.assertEqual(self.claim(allowed_paths=False), "IMPLEMENTING")
+        self.assertEqual(self.claim(allowed_paths=True), "IMPLEMENTING")
+
+    def test_claim_still_rejects_non_boolean_path_value(self):
+        for value in (None, 0, 1, 1.0, "yes", "", ["ok"], object()):
+            with self.subTest(value=repr(value)):
+                self.assertEqual(self.claim(allowed_paths=value), "BLOCKED")
+
+    def test_claim_exemption_does_not_relax_claim_verification(self):
+        for value in ("omitted", False, None, 1, "yes"):
+            with self.subTest(claim_verified=repr(value)):
+                gates = {} if value == "omitted" else {"claim_verified": value}
+                snapshot = Snapshot(REPO, "T-003", A, "CLAIMED")
+                result = transition(snapshot, "CLAIM_ACCEPTED", repository=REPO,
+                                    head_sha=A, actor="owner", **gates).state
+                self.assertEqual(result, "BLOCKED")
+
+    def test_claim_event_cannot_bypass_paths_elsewhere(self):
+        for state in ("IMPLEMENTING", "REVIEWING", "REVISING", "READY_FOR_OWNER",
+                      "BLOCKED"):
+            with self.subTest(state=state):
+                snapshot = Snapshot(REPO, "T-003", A, state)
+                self.assertEqual(self.claim(snapshot, allowed_paths=False),
+                                 "BLOCKED")
+        for actor in ("claude", "codex", "OWNER", None):
+            with self.subTest(actor=actor):
+                self.assertEqual(self.claim(actor=actor), "BLOCKED")
+
+    def test_lookalike_claim_event_gets_no_exemption(self):
+        for event in ("claim_accepted", "CLAIM_ACCEPTED ", "CLAIM-ACCEPTED", None,
+                      ["CLAIM_ACCEPTED"]):
+            with self.subTest(event=repr(event)):
+                self.assertEqual(self.claim(event=event, allowed_paths=False),
+                                 "BLOCKED")
+
+    def test_every_later_gated_event_requires_path_evidence(self):
+        for event in ("IMPLEMENTED", "REVIEW_CHANGES", "REVIEW_APPROVED"):
+            for paths in ("omitted", False):
+                with self.subTest(event=event, allowed_paths=paths):
+                    gates = {g: True for g in GATES if g != "allowed_paths"}
+                    if paths is False:
+                        gates["allowed_paths"] = False
+                    self.assertEqual(call(event, **gates), "BLOCKED")
+
+    def test_claim_without_evidence_then_unverified_implementation_blocks(self):
+        s = step(Snapshot(REPO, "T-003", A, "CLAIMED"), "CLAIM_ACCEPTED",
+                 actor="owner", allowed_paths=False)
+        self.assertEqual(s.state, "IMPLEMENTING")
+        self.assertEqual(step(s, "IMPLEMENTED", B, allowed_paths=False).state,
+                         "BLOCKED")
 
 
 if __name__ == "__main__":
